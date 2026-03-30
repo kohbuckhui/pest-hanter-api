@@ -11,43 +11,67 @@ const { saveReport } = require('../services/reportStore');
 
 router.post('/job-submit', async (req, res) => {
   const start = Date.now();
+  const ts = () => `${Date.now() - start}ms`;
   try {
     // 1. Validate
+    console.log(`[SUBMIT] Step 1: Validating payload...`);
     const { data, errors } = validate(req.body);
     if (errors.length > 0) {
+      console.log(`[SUBMIT] Validation failed: ${errors.join(', ')}`);
       return res.status(400).json({
         success: false,
         error: 'Missing required fields: ' + errors.join(', '),
         missingFields: errors
       });
     }
+    console.log(`[SUBMIT] Step 1 done (${ts()}): ${data.report_number}`);
 
-    // 2. Log to CRM (non-blocking)
-    logToCrm(data).catch(err => console.error('[CRM]', err.message));
+    // 2. Log to CRM (non-blocking, fully isolated)
+    console.log(`[SUBMIT] Step 2: Logging to CRM (non-blocking)...`);
+    logToCrm(data).then(() => {
+      console.log(`[CRM] Logged ${data.report_number}`);
+    }).catch(err => {
+      console.error(`[CRM] Failed: ${err.message}`);
+    });
 
     // 3. Lookup chemicals from Google Sheets
+    console.log(`[SUBMIT] Step 3: Looking up chemicals...`);
     let ragText = '';
     try {
       ragText = await lookupChemicals(data.chemicals_used);
+      console.log(`[SUBMIT] Step 3 done (${ts()}): ${ragText.length} chars RAG text`);
     } catch (err) {
-      console.error('[CHEMICALS]', err.message);
+      console.error(`[SUBMIT] Step 3 failed (${ts()}): ${err.message}`);
     }
 
     // 4. Generate narrative via Claude
-    const narrative = await generateNarrative(data, ragText);
+    console.log(`[SUBMIT] Step 4: Generating narrative via Claude...`);
+    let narrative;
+    try {
+      narrative = await generateNarrative(data, ragText);
+      console.log(`[SUBMIT] Step 4 done (${ts()}): ${narrative.length} chars narrative`);
+    } catch (err) {
+      console.error(`[SUBMIT] Step 4 FAILED (${ts()}): ${err.message}`);
+      throw err;
+    }
 
     // 5. Build HTML report
+    console.log(`[SUBMIT] Step 5: Building HTML report...`);
     const reportHtml = buildReport(data, narrative);
+    console.log(`[SUBMIT] Step 5 done (${ts()}): ${reportHtml.length} chars HTML`);
 
     // 6. Generate PDF
+    console.log(`[SUBMIT] Step 6: Generating PDF...`);
     let pdfBuffer = null;
     try {
       pdfBuffer = await generatePdf(reportHtml);
+      console.log(`[SUBMIT] Step 6 done (${ts()}): ${pdfBuffer.length} bytes PDF`);
     } catch (err) {
-      console.error('[PDF]', err.message);
+      console.error(`[SUBMIT] Step 6 failed (${ts()}): ${err.message}`);
     }
 
     // 7. Store report for approve workflow
+    console.log(`[SUBMIT] Step 7: Saving report to disk...`);
     saveReport(data.report_number, {
       report_number: data.report_number,
       customer_name: data.customer_name,
@@ -59,17 +83,20 @@ router.post('/job-submit', async (req, res) => {
       report_html: reportHtml,
       narrative
     });
+    console.log(`[SUBMIT] Step 7 done (${ts()})`);
 
     // 8. Notify admin via email
+    console.log(`[SUBMIT] Step 8: Sending admin notification...`);
     let adminNotified = false;
     try {
       await notifyAdmin(data, pdfBuffer);
       adminNotified = true;
+      console.log(`[SUBMIT] Step 8 done (${ts()}): admin notified`);
     } catch (err) {
-      console.error('[EMAIL]', err.message);
+      console.error(`[SUBMIT] Step 8 failed (${ts()}): ${err.message}`);
     }
 
-    console.log(`[SUBMIT] ${data.report_number} completed in ${Date.now() - start}ms`);
+    console.log(`[SUBMIT] COMPLETE ${data.report_number} in ${ts()}`);
 
     res.json({
       success: true,
@@ -80,7 +107,8 @@ router.post('/job-submit', async (req, res) => {
       admin_notified: adminNotified
     });
   } catch (err) {
-    console.error('[SUBMIT]', err.message);
+    console.error(`[SUBMIT] FATAL (${ts()}): ${err.message}`);
+    console.error(err.stack);
     res.status(500).json({ success: false, error: err.message });
   }
 });
