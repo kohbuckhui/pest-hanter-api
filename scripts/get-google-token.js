@@ -22,7 +22,10 @@ const oauth2Client = new google.auth.OAuth2(
 
 const authUrl = oauth2Client.generateAuthUrl({
   access_type: 'offline',
-  scope: ['https://www.googleapis.com/auth/spreadsheets'],
+  scope: [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/gmail.send'
+  ],
   prompt: 'consent'
 });
 

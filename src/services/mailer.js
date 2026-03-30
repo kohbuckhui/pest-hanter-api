@@ -1,20 +1,64 @@
-const nodemailer = require('nodemailer');
+const { google } = require('googleapis');
 
-let transporter = null;
+let gmailClient = null;
 
-function getTransporter() {
-  if (transporter) return transporter;
-  transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.SMTP_PORT || '587'),
-    secure: false,
-    requireTLS: true,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS
+function getGmail() {
+  if (gmailClient) return gmailClient;
+  const auth = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET
+  );
+  auth.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
+  gmailClient = google.gmail({ version: 'v1', auth });
+  return gmailClient;
+}
+
+function buildMimeMessage({ from, to, subject, html, attachments }) {
+  const boundary = 'boundary_' + Date.now().toString(36);
+  const lines = [
+    `From: ${from}`,
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/html; charset="UTF-8"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    Buffer.from(html).toString('base64'),
+  ];
+
+  if (attachments && attachments.length > 0) {
+    for (const att of attachments) {
+      lines.push(
+        `--${boundary}`,
+        `Content-Type: ${att.contentType}; name="${att.filename}"`,
+        `Content-Disposition: attachment; filename="${att.filename}"`,
+        'Content-Transfer-Encoding: base64',
+        '',
+        att.content.toString('base64')
+      );
     }
+  }
+
+  lines.push(`--${boundary}--`);
+  return lines.join('\r\n');
+}
+
+async function sendEmail({ from, to, subject, html, attachments }) {
+  const gmail = getGmail();
+  const raw = buildMimeMessage({ from, to, subject, html, attachments });
+  const encodedMessage = Buffer.from(raw)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+
+  await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: { raw: encodedMessage }
   });
-  return transporter;
 }
 
 async function notifyAdmin(data, pdfBuffer) {
@@ -57,7 +101,7 @@ async function notifyAdmin(data, pdfBuffer) {
     });
   }
 
-  await getTransporter().sendMail({
+  await sendEmail({
     from: process.env.SMTP_USER,
     to: process.env.ADMIN_EMAIL,
     subject: `[ACTION REQUIRED] New Report - ${data.report_number} - ${data.customer_name}`,
@@ -83,7 +127,7 @@ async function sendToCustomer(email, reportNumber, pdfBuffer) {
     });
   }
 
-  await getTransporter().sendMail({
+  await sendEmail({
     from: process.env.SMTP_USER,
     to: email,
     subject: `Pest Hanter Service Report - ${reportNumber}`,
