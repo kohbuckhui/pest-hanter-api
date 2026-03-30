@@ -1,27 +1,23 @@
 /**
  * Helper script to obtain a Google OAuth2 refresh token.
  *
- * Prerequisites:
- *   1. Create a project at https://console.cloud.google.com
- *   2. Enable the Google Sheets API
- *   3. Create OAuth2 credentials (Desktop app type)
- *   4. Download the credentials and set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET in .env
+ * Starts a local HTTP server on port 3001 to catch the OAuth2 callback.
  *
  * Usage:
  *   npm run get-token
- *
- * Follow the URL printed to the console, authorise access,
- * paste the code back, and copy the refresh_token into your .env file.
  */
 
 require('dotenv').config();
 const { google } = require('googleapis');
-const readline = require('readline');
+const http = require('http');
+const url = require('url');
+
+const REDIRECT_URI = 'http://localhost:3001/oauth2callback';
 
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  'urn:ietf:wg:oauth:2.0:oob'
+  REDIRECT_URI
 );
 
 const authUrl = oauth2Client.generateAuthUrl({
@@ -30,18 +26,44 @@ const authUrl = oauth2Client.generateAuthUrl({
   prompt: 'consent'
 });
 
-console.log('\n1. Open this URL in your browser:\n');
+console.log('\nOpen this URL in your browser:\n');
 console.log(authUrl);
-console.log('\n2. Authorise the app and copy the code.\n');
+console.log('\nWaiting for authorization...\n');
 
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-rl.question('3. Paste the code here: ', async (code) => {
+const server = http.createServer(async (req, res) => {
+  const parsed = url.parse(req.url, true);
+  if (parsed.pathname !== '/oauth2callback') {
+    res.writeHead(404);
+    res.end();
+    return;
+  }
+
+  const code = parsed.query.code;
+  if (!code) {
+    res.writeHead(400);
+    res.end('Missing code parameter');
+    return;
+  }
+
   try {
-    const { tokens } = await oauth2Client.getToken(code.trim());
-    console.log('\nRefresh token (add to .env as GOOGLE_REFRESH_TOKEN):');
+    const { tokens } = await oauth2Client.getToken(code);
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<h1>Success!</h1><p>You can close this tab. Check your terminal for the refresh token.</p>');
+
+    console.log('='.repeat(60));
+    console.log('GOOGLE_REFRESH_TOKEN:');
     console.log(tokens.refresh_token);
+    console.log('='.repeat(60));
+    console.log('\nAdd this to your .env file as GOOGLE_REFRESH_TOKEN');
   } catch (err) {
+    res.writeHead(500);
+    res.end('Error: ' + err.message);
     console.error('Error:', err.message);
   }
-  rl.close();
+
+  setTimeout(() => { server.close(); process.exit(0); }, 1000);
+});
+
+server.listen(3001, () => {
+  console.log('Callback server listening on http://localhost:3001');
 });
