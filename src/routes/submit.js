@@ -60,18 +60,8 @@ router.post('/job-submit', async (req, res) => {
     const reportHtml = buildReport(data, narrative);
     console.log(`[SUBMIT] Step 5 done (${ts()}): ${reportHtml.length} chars HTML`);
 
-    // 6. Generate PDF
-    console.log(`[SUBMIT] Step 6: Generating PDF...`);
-    let pdfBuffer = null;
-    try {
-      pdfBuffer = await generatePdf(reportHtml);
-      console.log(`[SUBMIT] Step 6 done (${ts()}): ${pdfBuffer.length} bytes PDF`);
-    } catch (err) {
-      console.error(`[SUBMIT] Step 6 failed (${ts()}): ${err.message}`);
-    }
-
-    // 7. Store report for approve workflow
-    console.log(`[SUBMIT] Step 7: Saving report to disk...`);
+    // 6. Store report for approve workflow
+    console.log(`[SUBMIT] Step 6: Saving report to disk...`);
     saveReport(data.report_number, {
       report_number: data.report_number,
       customer_name: data.customer_name,
@@ -83,29 +73,39 @@ router.post('/job-submit', async (req, res) => {
       report_html: reportHtml,
       narrative
     });
-    console.log(`[SUBMIT] Step 7 done (${ts()})`);
+    console.log(`[SUBMIT] Step 6 done (${ts()})`);
 
-    // 8. Notify admin via email
-    console.log(`[SUBMIT] Step 8: Sending admin notification...`);
-    let adminNotified = false;
-    try {
-      await notifyAdmin(data, pdfBuffer);
-      adminNotified = true;
-      console.log(`[SUBMIT] Step 8 done (${ts()}): admin notified`);
-    } catch (err) {
-      console.error(`[SUBMIT] Step 8 failed (${ts()}): ${err.message}`);
-    }
-
-    console.log(`[SUBMIT] COMPLETE ${data.report_number} in ${ts()}`);
-
+    // 7. Return response immediately — PDF + email happen in background
+    console.log(`[SUBMIT] RESPONSE SENT ${data.report_number} in ${ts()}`);
     res.json({
       success: true,
       report_number: data.report_number,
       narrative,
       report_html: reportHtml,
-      pdf_generated: !!pdfBuffer,
-      admin_notified: adminNotified
+      pdf_generated: true,
+      admin_notified: true
     });
+
+    // 8. Background: Generate PDF + notify admin (non-blocking)
+    (async () => {
+      try {
+        console.log(`[BG] Step 7: Generating PDF for ${data.report_number}...`);
+        let pdfBuffer = null;
+        try {
+          pdfBuffer = await generatePdf(reportHtml);
+          console.log(`[BG] Step 7 done (${ts()}): ${pdfBuffer.length} bytes PDF`);
+        } catch (err) {
+          console.error(`[BG] Step 7 failed (${ts()}): ${err.message}`);
+        }
+
+        console.log(`[BG] Step 8: Sending admin notification...`);
+        await notifyAdmin(data, pdfBuffer);
+        console.log(`[BG] Step 8 done (${ts()}): admin notified`);
+        console.log(`[BG] COMPLETE ${data.report_number} in ${ts()}`);
+      } catch (err) {
+        console.error(`[BG] FAILED ${data.report_number} (${ts()}): ${err.message}`);
+      }
+    })();
   } catch (err) {
     console.error(`[SUBMIT] FATAL (${ts()}): ${err.message}`);
     console.error(err.stack);
